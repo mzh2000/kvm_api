@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Cloud-init 临时文件
+ci-*/
+
+# 虚拟机磁盘 (大文件，不入库)
+*.qcow2
+*.qcow2.part
+*.qcow2.part.xz
+*.img
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
