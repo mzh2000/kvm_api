@@ -667,6 +667,7 @@ def write_cloud_init_iso(
                 "-output", str(iso_path),
                 "-volid", "cidata",
                 "-joliet", "-rock",
+                "-graft-points",
                 f"user-data={work_dir / 'user-data'}",
                 f"meta-data={work_dir / 'meta-data'}",
             ]

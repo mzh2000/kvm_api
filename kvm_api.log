@@ -1,6 +1,6 @@
 nohup: 忽略输入
-INFO:     Started server process [288138]
+INFO:     Started server process [176861]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     192.168.2.2:40208 - "GET /api/v1/vm/create HTTP/1.1" 405 Method Not Allowed
+INFO:     172.19.0.5:32914 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
