@@ -4,3 +4,16 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 INFO:     172.19.0.5:32914 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:32912 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:43670 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:58086 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:48962 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:47258 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:37522 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:59324 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:57318 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:47886 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:53158 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:59176 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:54698 - "POST /api/v1/vm/create HTTP/1.1" 200 OK
+INFO:     172.19.0.5:51286 - "POST /api/v1/vm/create HTTP/1.1" 200 OK

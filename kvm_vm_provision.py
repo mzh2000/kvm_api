@@ -114,7 +114,7 @@ CLOUD_IMAGE_CATALOG: List[OSImage] = [
         url="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
         default_user="debian",
         checksum_url="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
-        variant="debiansid",  # libvirt osinfo 中尚无 debian13，使用最近的
+        variant="debian13",
     ),
     OSImage(
         label="debian-12",
@@ -122,7 +122,7 @@ CLOUD_IMAGE_CATALOG: List[OSImage] = [
         url="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
         default_user="debian",
         checksum_url="https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
-        variant="debian10",  # libvirt osinfo 中 Debian 12 用 debian10
+        variant="debian12",
     ),
     OSImage(
         label="openeuler-24.03-sp4",
@@ -130,7 +130,7 @@ CLOUD_IMAGE_CATALOG: List[OSImage] = [
         url="https://repo.openeuler.org/openEuler-24.03-LTS-SP4/virtual_machine_img/x86_64/openEuler-24.03-LTS-SP4-x86_64.qcow2.xz",
         default_user="root",
         checksum_url="https://repo.openeuler.org/openEuler-24.03-LTS-SP4/virtual_machine_img/x86_64/openEuler-24.03-LTS-SP4-x86_64.qcow2.xz.sha256sum",
-        variant="openeuler24.03",
+        variant="generic",  # osinfo-db 暂无 openEuler 专用 variant
     ),
     OSImage(
         label="openeuler-22.03-sp4",
@@ -138,7 +138,7 @@ CLOUD_IMAGE_CATALOG: List[OSImage] = [
         url="https://repo.openeuler.org/openEuler-22.03-LTS-SP4/virtual_machine_img/x86_64/openEuler-22.03-LTS-SP4-x86_64.qcow2.xz",
         default_user="root",
         checksum_url="https://repo.openeuler.org/openEuler-22.03-LTS-SP4/virtual_machine_img/x86_64/openEuler-22.03-LTS-SP4-x86_64.qcow2.xz.sha256sum",
-        variant="openeuler22.03",
+        variant="generic",  # osinfo-db 暂无 openEuler 专用 variant
     ),
 ]
 
@@ -240,7 +240,20 @@ def check_kvm() -> bool:
     # 3. libvirtd
     cp = run_cmd(["systemctl", "is-active", "libvirtd"])
     if cp.stdout.strip() != "active":
-        errors.append("libvirtd 服务未运行 —— 执行 'systemctl start libvirtd'。")
+        print(f"  [WARN] libvirtd 服务未运行，正在尝试启动...")
+        start_cp = run_cmd(["systemctl", "start", "libvirtd"], check=False)
+        if start_cp.returncode != 0:
+            errors.append(
+                f"libvirtd 服务启动失败 —— 请手动执行 'systemctl start libvirtd'。\n"
+                f"            stderr: {start_cp.stderr.strip()}"
+            )
+        else:
+            # 再次确认已启动
+            cp2 = run_cmd(["systemctl", "is-active", "libvirtd"])
+            if cp2.stdout.strip() == "active":
+                print(f"  [OK] libvirtd 服务已启动")
+            else:
+                errors.append("libvirtd 服务启动后仍为非活跃状态，请检查系统日志。")
     else:
         print(f"  [OK] libvirtd 服务运行中")
 
@@ -526,6 +539,9 @@ def generate_user_data(
     timezone: str = "Asia/Shanghai",
     extra_packages: Optional[List[str]] = None,
     extra_cmds: Optional[List[str]] = None,
+    static_ip: str = "",
+    static_gateway: str = "",
+    static_dns: str = "",
 ) -> str:
     """生成 cloud-init user-data YAML 内容。
 
@@ -537,6 +553,9 @@ def generate_user_data(
         timezone:            时区
         extra_packages:      额外要安装的软件包
         extra_cmds:          额外的 runcmd 命令
+        static_ip:           静态 IPv4 地址/前缀（可选，用于 systemd-networkd 配置）
+        static_gateway:      网关地址
+        static_dns:          DNS 服务器（逗号分隔）
 
     Returns:
         cloud-init user-data YAML 字符串
@@ -582,6 +601,36 @@ def generate_user_data(
     if extra_cmds:
         data["runcmd"] = extra_cmds + data["runcmd"]
 
+    # 如果指定了静态 IP，通过 write_files + runcmd 配置 systemd-networkd
+    # 这比 network-config 更可靠：Debian 13 云镜像默认使用 systemd-networkd
+    # 而非 netplan，cloud-init 的 network-config (netplan v2) 无法被正确渲染。
+    #
+    # 文件名 10-static.network 在字母序上优先于云镜像自带的 DHCP 配置
+    # （通常叫 80-*.network 或 99-*.network），因此 systemd-networkd 会
+    # 自动选择我们的静态配置，无需手动禁用 DHCP 文件。
+    if static_ip:
+        networkd_content = generate_networkd_unit(static_ip, static_gateway, static_dns)
+        data.setdefault("write_files", []).append({
+            "path": "/etc/systemd/network/10-static.network",
+            "content": networkd_content,
+            "permissions": "0644",
+        })
+        data["runcmd"].extend([
+            # 清理 cloud-init 可能遗留的 netplan 残配置（若 netplan 未安装，
+            # cloud-init 仍可能写入 /etc/netplan/ 却无法 apply，干扰网络）
+            "rm -f /etc/netplan/50-cloud-init.yaml 2>/dev/null || true",
+            # 启用并重启 systemd-networkd
+            "systemctl enable systemd-networkd.service",
+            "systemctl restart systemd-networkd.service",
+            # failsafe：确保默认路由存在
+            f"ip route replace default via {static_gateway} 2>/dev/null || true",
+            # 诊断日志
+            "echo '=== network state ===' >> /var/log/cloud-init-done.log",
+            "ip addr show >> /var/log/cloud-init-done.log 2>&1",
+            "ip route show >> /var/log/cloud-init-done.log 2>&1",
+            "cat /etc/resolv.conf >> /var/log/cloud-init-done.log 2>&1",
+        ])
+
     header = "#cloud-config\n"
     if yaml:
         return header + yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -590,8 +639,63 @@ def generate_user_data(
         return header + json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def generate_network_config(ip: str, gateway: str, dns: str) -> str:
+def generate_network_config(ip: str, gateway: str, dns: str, iface: str = "", mac: str = "") -> str:
     """生成 cloud-init network-config (NoCloud v2 格式)。
+
+    使用 routes 替代已废弃的 gateway4，通过 match 自动匹配网卡。
+
+    Args:
+        ip:      IPv4 地址 + 前缀，如 '192.168.122.100/24'
+        gateway: 网关地址
+        dns:     DNS 服务器，多个以逗号分隔
+        iface:   网卡接口名（可选，默认通过 match 自动匹配 en*）
+        mac:     MAC 地址（可选，用于精确 match）
+
+    Returns:
+        YAML 字符串
+    """
+    iface_config: Dict = {
+        "dhcp4": False,
+        "addresses": [ip],
+        "routes": [{"to": "default", "via": gateway}],
+    }
+
+    # DNS: 优先使用网关作为 DNS（走 libvirt dnsmasq 转发），再追加指定的公网 DNS
+    dns_addrs = [addr.strip() for addr in dns.split(",") if addr.strip()]
+    if gateway and gateway not in dns_addrs:
+        dns_addrs.insert(0, gateway)
+    iface_config["nameservers"] = {"addresses": dns_addrs}
+
+    # 优先使用指定接口名，否则用 match 匹配可预测网卡名
+    if iface:
+        ethernets = {iface: iface_config}
+    else:
+        match_rule: Dict[str, str] = {"name": "en*"}
+        if mac:
+            match_rule["macaddress"] = mac
+        ethernets = {
+            "eth0": {
+                **iface_config,
+                "match": match_rule,
+                "set-name": "eth0",
+            }
+        }
+
+    net: Dict = {
+        "version": 2,
+        "ethernets": ethernets,
+    }
+    if yaml:
+        return yaml.dump(net, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    else:
+        return json.dumps(net, indent=2)
+
+
+def generate_networkd_unit(ip: str, gateway: str, dns: str) -> str:
+    """生成 systemd-networkd .network 配置文件内容。
+
+    Debian 13 云镜像默认使用 systemd-networkd 而非 netplan，
+    因此需要通过 write_files + runcmd 在 user-data 中直接配置网络。
 
     Args:
         ip:      IPv4 地址 + 前缀，如 '192.168.122.100/24'
@@ -599,25 +703,23 @@ def generate_network_config(ip: str, gateway: str, dns: str) -> str:
         dns:     DNS 服务器，多个以逗号分隔
 
     Returns:
-        YAML 字符串
+        systemd-networkd 配置文件内容
     """
-    net = {
-        "version": 2,
-        "ethernets": {
-            "eth0": {
-                "dhcp4": False,
-                "addresses": [ip],
-                "gateway4": gateway,
-                "nameservers": {
-                    "addresses": [addr.strip() for addr in dns.split(",")],
-                },
-            }
-        },
-    }
-    if yaml:
-        return yaml.dump(net, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    else:
-        return json.dumps(net, indent=2)
+    # DNS: 优先使用网关（libvirt dnsmasq 转发），再追加公网 DNS
+    dns_addrs = [addr.strip() for addr in dns.split(",") if addr.strip()]
+    if gateway and gateway not in dns_addrs:
+        dns_addrs.insert(0, gateway)
+    dns_entries = "\n".join(f"DNS={addr}" for addr in dns_addrs)
+
+    return (
+        "[Match]\n"
+        "Name=en*\n"
+        "\n"
+        "[Network]\n"
+        f"Address={ip}\n"
+        f"Gateway={gateway}\n"
+        f"{dns_entries}\n"
+    )
 
 
 def write_cloud_init_iso(
@@ -973,6 +1075,7 @@ def main():
 
     # 网络参数
     parser.add_argument("--bridge", type=str, default="virbr0", help="宿主机网桥 (默认: virbr0)")
+    parser.add_argument("--interface", type=str, default="", dest="iface", help="VM 内网卡名 (默认自动匹配 en* 可预测网卡名)")
     parser.add_argument("--ip", type=str, help="静态 IPv4 地址/前缀，如 192.168.122.100/24")
     parser.add_argument("--gateway", type=str, help="网关地址")
     parser.add_argument("--dns", type=str, default="223.5.5.5,119.29.29.29", help="DNS (多个逗号分隔)")
@@ -1025,6 +1128,11 @@ def main():
     if args.ip and not args.gateway:
         print("[FAIL] 指定 --ip 时必须同时指定 --gateway。")
         sys.exit(1)
+
+    # IP 前缀校验：若无 CIDR 前缀则自动补 /24
+    if args.ip and "/" not in args.ip:
+        print(f"  [WARN] --ip 缺少子网前缀，已自动追加 /24: {args.ip}/24")
+        args.ip = f"{args.ip}/24"
 
     # 密码处理
     password = args.password
@@ -1098,13 +1206,16 @@ def main():
         ssh_authorized_keys=ssh_keys,
         timezone=args.timezone,
         extra_cmds=args.extra_cmd,
+        static_ip=args.ip or "",
+        static_gateway=args.gateway or "",
+        static_dns=args.dns or "",
     )
     print(f"  [OK] user-data 已生成 ({len(user_data)} bytes)")
 
     # 生成 network-config（若有静态 IP）
     network_config = ""
     if args.ip:
-        network_config = generate_network_config(args.ip, args.gateway, args.dns)
+        network_config = generate_network_config(args.ip, args.gateway, args.dns, getattr(args, 'iface', ''))
         print(f"  [OK] network-config 已生成 (静态 IP: {args.ip})")
     else:
         print(f"  [INFO] 未指定静态 IP，将使用 DHCP")
